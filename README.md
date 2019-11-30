@@ -6,6 +6,8 @@
 
 根据西北工业大学明德学院 URP 教务系统的选课结果生成 ics 日历。
 
+此项目有可运行在服务器的 web 版本: [NPUMD_URP_class_schedule_web](https://github.com/Sky1wu/NPUMD_URP_class_schedule_web)
+
 ## 功能
 
 OCR 识别教务系统验证码自动登录，抓取选课结果页面信息并生成包含课程信息的 ics 文件，可导入手机、电脑等日历应用中快捷查看课表。
