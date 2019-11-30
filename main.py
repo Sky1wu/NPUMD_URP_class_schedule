@@ -6,41 +6,36 @@ from bs4 import BeautifulSoup
 import os
 import re
 import datetime
+import configparser
+from io import BytesIO
+
+config = configparser.ConfigParser()
+config.read('config.ini')
+
 
 # 教务系统地址
-url = 'http://urp.npumd.cn/'
+url = config['URP'].get('url')
 
 # 教务系统账号密码
-username = ''
-password = ''
+username = config['URP'].get('username')
+password = config['URP'].get('password')
 
 # 第一周周一日期
-beginDate = datetime.date(2019, 9, 9)
+startYear = config['startDate'].getint('year')
+startMonth = config['startDate'].getint('month')
+startDay = config['startDate'].getint('day')
 
-'''
-上课时间：
-01: 08:30 - 09:15
-02: 09:25 - 10:10
-03: 10:25 - 11:10
-04: 11:20 - 12:05
-05: 14:00 - 14:45
-06: 14:55 - 15:40
-07: 15:50 - 16:35
-08: 16:45 - 17:30
-09: 19:00 - 19:45
-10: 19:55 - 20:40
-11: 20:50 - 21:35
+beginDate = datetime.date(startYear, startMonth, startDay)
 
-startTime 和 endTime 与此时间表对应
-'''
 
-startTime = (None, '083000', '092500', '102500',
-             '112000', '140000', '145500', '155000', '164500', '190000', '195500', '205000')
+startTime = [None]
+startTime.extend(config['time'].get('startTime').replace(' ', '').split(','))
 
-endTime = (None, '091500', '101000', '111000', '120500',
-           '144500', '154000', '163500', '173000', '194500', '204000', '213500')
+endTime = [None]
+endTime.extend(config['time'].get('endTime').replace(' ', '').split(','))
 
-weekName = (None, 'MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU')
+weekName = [None]
+weekName.extend(config['time'].get('weekName').replace(' ', '').split(','))
 
 VCALENDAR = '''BEGIN:VCALENDAR
 VERSION:2.0
@@ -72,11 +67,7 @@ def get_captcha(session):
 
         response = session.get(captcha_url, params=captcha_data)
 
-        file = open('captcha.png', 'wb')
-        file.write(response.content)
-        file.close()
-
-        im = Image.open('captcha.png')
+        im = Image.open(BytesIO(response.content))
         w, h = im.size
         im = im.resize((w*2, h*2))
         gray = im.convert('L')  # 灰度处理
@@ -89,10 +80,8 @@ def get_captcha(session):
             else:
                 table.append(1)
         out = gray.point(table, '1')
-        out.save('captcha_thresholded.png')
 
-        th = Image.open('captcha_thresholded.png')
-        code = pytesseract.image_to_string(th)
+        code = pytesseract.image_to_string(out)
 
         code = filter(str.isalnum, code)
         code = ''.join(list(code))
@@ -126,8 +115,6 @@ for _ in range(5):
         loginSuccess = True
         break
 
-os.remove('captcha.png')
-os.remove('captcha_thresholded.png')
 
 if loginSuccess:
     table_url = url+'xkAction.do'
@@ -167,22 +154,46 @@ if loginSuccess:
         #print(className, classWeekTimes, classWeek, classSession, classAmount, classBuilding, classRoom)
 
         VEVENT += 'BEGIN:VEVENT\n'
+        # 周次
         WeekTimes = re.findall(r"\d+\.?\d*", classWeekTimes)
+        # 开始周
         delta = datetime.timedelta(weeks=int(WeekTimes[0])-1)
+        # 开始星期
         delta += datetime.timedelta(days=int(classWeek)-1)
         classStartTime = beginDate+delta
-        VEVENT += ('DTSTART;TZID=Asia/Shanghai:' +
-                   classStartTime.strftime("%Y%m%dT")+startTime[int(classSession)]+'\n')
-        VEVENT += ('DTEND;TZID=Asia/Shanghai:' +
-                   classStartTime.strftime("%Y%m%dT")+endTime[int(classSession)+int(classAmount)-1]+'\n')
+        # 开始日期
+        classStartDate = beginDate+delta
+        # 开始时间
+        classStartTime = datetime.datetime.strptime(
+            startTime[int(classSession)], '%H:%M').time()
+        # 结束时间
+        classEndTime = datetime.datetime.strptime(
+            endTime[int(classSession)+int(classAmount)-1], '%H:%M').time()
+        # 最终开始时间
+        classStartDateTime = datetime.datetime.combine(
+            classStartDate, classStartTime)
+        # 最终结束时间
+        classEndDateTime = datetime.datetime.combine(
+            classStartDate, classEndTime)
+        # 写入开始时间
+        VEVENT += 'DTSTART;TZID=Asia/Shanghai:{classStartDateTime}\n'.format(classStartDateTime=classStartDateTime.strftime(
+            '%Y%m%dT%H%M%S'))
+        # 写入结束时间
+        VEVENT += 'DTEND;TZID=Asia/Shanghai:{classEndDateTime}\n'.format(classEndDateTime=classEndDateTime.strftime(
+            '%Y%m%dT%H%M%S'))
+
+        # 设置循环
         if '-'in classWeekTimes:
-            VEVENT += ('RRULE:FREQ=WEEKLY;WKST=MO;COUNT=' +
-                       str(int(WeekTimes[1])-int(WeekTimes[0])+1)+';BYDAY='+weekName[int(classWeek)]+'\n')
+            VEVENT += 'RRULE:FREQ=WEEKLY;WKST=MO;COUNT={count};BYDAY={byday}\n'.format(count=str(
+                int(WeekTimes[1])-int(WeekTimes[0])+1), byday=weekName[int(classWeek)])
         else:
             interval = int(WeekTimes[1])-int(WeekTimes[0])
-            VEVENT += ('RRULE:FREQ=WEEKLY;WKST=MO;COUNT=' +
-                       str(len(WeekTimes))+';INTERVAL='+str(interval)+';BYDAY='+weekName[int(classWeek)]+'\n')
+            VEVENT += 'RRULE:FREQ=WEEKLY;WKST=MO;COUNT={count};INTERVAL={interval};BYDAY={byday}\n'.format(
+                count=str(len(WeekTimes)), interval=str(interval), byday=weekName[int(classWeek)])
+
+        # 地点
         VEVENT += ('LOCATION:'+classBuilding+classRoom+'\n')
+        # 名称
         VEVENT += ('SUMMARY:'+className+'\n')
         VEVENT += 'END:VEVENT\n'
         file.write(VEVENT)
